@@ -1,0 +1,29 @@
+{
+  "name": "wonderlab-snow-trail",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/susanthavfx-art/WonderLab-Snow-Trail.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/susanthavfx-art/WonderLab-Snow-Trail/issues"
+  },
+  "homepage": "https://github.com/susanthavfx-art/WonderLab-Snow-Trail#readme",
+  "dependencies": {
+    "@mediapipe/pose": "^0.5.1675469404",
+    "lucide-static": "^1.79.0",
+    "three": "^0.187.0",
+    "vite": "^8.3.8"
+  },
+  "type": "module"
+}
