@@ -9,6 +9,10 @@ npm run dev
 
 Open the URL printed by Vite. Use localhost or HTTPS for webcam access. WebGL 2 is required for gameplay. To create a production build, run `npm run build` and serve `dist/` over HTTPS.
 
+## GitHub Pages
+
+The Pages workflow builds the game and publishes only `dist/` on pushes to `main`. Keep the Pages deployment source set to **GitHub Actions**. The built files use relative asset URLs so they also work under the repository subpath.
+
 ## Controls
 
 - Choose **Start Game → Enable Webcam & Ride**, allow camera access, and step back until your shoulders and hips are visible. Lean left or right to steer. If tracking is lost, the run waits until you're visible again.
