@@ -41,7 +41,7 @@ export async function startCamera({signal, onStatus = () => {}}) {
   const video = document.createElement('video');
   video.muted = true;
   video.playsInline = true;
-  let stream, pose, active = true, busy = false, frame, last = -1, lean = 0, seen = 0, failed = false;
+  let stream, pose, active = true, busy = false, frame, last = -1, nextFrame = 0, landmarks = null, validPose = false, lean = 0, seen = 0, failed = false;
   const closePose = () => {
     const instance = pose;
     pose = null;
@@ -59,7 +59,7 @@ export async function startCamera({signal, onStatus = () => {}}) {
   signal.addEventListener('abort', stop, {once:true});
   try {
     onStatus('Waiting for browser camera permission…');
-    const request = navigator.mediaDevices.getUserMedia({audio:false,video:{width:{ideal:640},height:{ideal:480},facingMode:'user'}}).then(result => {
+    const request = navigator.mediaDevices.getUserMedia({audio:false,video:{width:{ideal:480},height:{ideal:360},frameRate:{ideal:24,max:30},facingMode:'user'}}).then(result => {
       if (!active) result.getTracks().forEach(track => track.stop());
       else stream = result;
       return result;
@@ -78,7 +78,19 @@ export async function startCamera({signal, onStatus = () => {}}) {
       if (!active) return;
       pose = new Pose({locateFile:name=>assets[`/node_modules/@mediapipe/pose/${name}`]});
       pose.setOptions({modelComplexity:0,smoothLandmarks:true,enableSegmentation:false});
-      pose.onResults(({poseLandmarks:p})=>{if(!active||!p||![11,12,23,24].every(i=>p[i]?.visibility>.55))return;const dx=(p[23].x+p[24].x-p[11].x-p[12].x)/2;const height=Math.abs(p[23].y+p[24].y-p[11].y-p[12].y)/2;if(height<.04)return;const angle=dx/height;lean=Math.abs(angle)<.07?0:Math.sign(angle)*Math.min(1,(Math.abs(angle)-.07)*5);seen=performance.now();});
+      pose.onResults(({poseLandmarks:p})=>{
+        if(!active)return;
+        landmarks=p||null;
+        validPose=false;
+        if(!p||![11,12,23,24].every(i=>p[i]?.visibility>.55))return;
+        const dx=(p[23].x+p[24].x-p[11].x-p[12].x)/2;
+        const height=Math.abs(p[23].y+p[24].y-p[11].y-p[12].y)/2;
+        if(height<.04)return;
+        validPose=true;
+        const angle=dx/height;
+        lean=Math.abs(angle)<.07?0:Math.sign(angle)*Math.min(1,(Math.abs(angle)-.07)*5);
+        seen=performance.now();
+      });
       busy = true;
       try { await pose.initialize(); }
       finally { busy = false; if (!active) closePose(); }
@@ -86,9 +98,10 @@ export async function startCamera({signal, onStatus = () => {}}) {
     await waitFor(initialize().catch(() => { throw Error('Motion tracking could not start. Try again or play without a webcam.'); }), signal, 25000, 'Motion tracking timed out. Try again or play without a webcam.');
     signal.throwIfAborted();
   } catch (error) { stop(); throw error; }
-  async function tick() {
+  async function tick(now) {
     if (!active) return;
-    if (video.readyState >= 2 && video.currentTime !== last) {
+    if (now >= nextFrame && video.readyState >= 2 && video.currentTime !== last) {
+      nextFrame = now + 64;
       last = video.currentTime;
       busy = true;
       const send = Promise.resolve().then(() => pose.send({image:video}));
@@ -103,5 +116,5 @@ export async function startCamera({signal, onStatus = () => {}}) {
     if (active && !failed) frame = requestAnimationFrame(tick);
   }
   frame = requestAnimationFrame(tick);
-  return {video,stop,get failed(){return failed||!stream.getVideoTracks().some(t=>t.readyState==='live')},get ready(){return !this.failed&&seen>0&&performance.now()-seen<750},get lean(){return this.ready?lean:0}};
+  return {video,stop,get landmarks(){return landmarks},get locked(){return this.ready&&validPose},get failed(){return failed||!stream.getVideoTracks().some(t=>t.readyState==='live')},get ready(){return !this.failed&&seen>0&&performance.now()-seen<750},get lean(){return this.ready?lean:0}};
 }

@@ -2,24 +2,11 @@ import * as T from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import boy from '../Models/Snow Boy.glb?url';
 import rocks from '../Models/free_pack_-_rocks_stylized.glb?url';
-import trees from '../Models/snow_trees_pack_lowpoly.glb?url';
 import pines from '../Models/snowy_pine_trees_pack__ps1_low_poly.glb?url';
-import fallen from '../Models/snowy_fallen_tree.glb?url';
-
-function loader() {
-  // The fallen tree uses the older spec/gloss extension; retain its diffuse map.
-  return new GLTFLoader().register(parser => ({
-    name: 'KHR_materials_pbrSpecularGlossiness',
-    async extendMaterialParams(index, params) {
-      const diffuse = parser.json.materials[index].extensions?.[this.name]?.diffuseTexture;
-      if (diffuse) await parser.assignTexture(params, 'map', diffuse, T.SRGBColorSpace);
-    },
-  }));
-}
 
 export function loadTrailModels(onModel) {
-  const gltf = loader();
-  const entries = {rider:boy, rocks, trees, pines, fallen};
+  const gltf = new GLTFLoader();
+  const entries = {rider:boy, rocks, pines};
   for (const [kind, url] of Object.entries(entries)) {
     gltf.loadAsync(url).then(asset => onModel(kind, asset)).catch(error => {
       console.warn(`Using fallback for ${kind}:`, error);
