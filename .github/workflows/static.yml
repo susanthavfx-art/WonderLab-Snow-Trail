@@ -9,11 +9,13 @@ on:
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages.
+# `actions: write` is needed to clean up stale Pages artifacts before uploading.
 permissions:
   contents: read
   pages: write
   id-token: write
+  actions: write
 
 # Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
 # However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
@@ -29,9 +31,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -40,9 +42,26 @@ jobs:
       - name: Build game
         run: npm run build
       - name: Setup Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
+      # Re-runs of the same workflow run keep appending `github-pages` artifacts,
+      # which makes deploy-pages fail with "Multiple artifacts named
+      # github-pages". Clear any leftovers from earlier attempts first.
+      - name: Remove stale Pages artifacts
+        # Best effort: if this is blocked the deploy below still decides the run.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          ids=$(gh api "repos/$REPO/actions/runs/$RUN_ID/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name == "github-pages") | .id') || exit 0
+          for id in $ids; do
+            echo "Deleting stale github-pages artifact $id"
+            gh api --method DELETE "repos/$REPO/actions/artifacts/$id" || true
+          done
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: dist
       - name: Deploy to GitHub Pages

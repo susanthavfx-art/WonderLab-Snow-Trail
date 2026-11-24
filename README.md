@@ -13,6 +13,8 @@ Open the URL printed by Vite. Use localhost or HTTPS for webcam access. WebGL 2 
 
 The Pages workflow builds the game and publishes only `dist/` on pushes to `main`. Keep the Pages deployment source set to **GitHub Actions**. The built files use relative asset URLs so they also work under the repository subpath.
 
+Each push starts a fresh run, so a deploy never mixes artifacts from earlier attempts. Re-running an old run can leave several `github-pages` artifacts behind, which makes `deploy-pages` fail with *Multiple artifacts named "github-pages"*. The workflow clears those leftovers before uploading, but the simplest recovery is to trigger a new run from **Actions → Deploy static content to Pages → Run workflow** (or push any commit to `main`) instead of re-running the failed one, and to delete the extra artifacts from the failed run's page if re-running is unavoidable.
+
 ## Controls
 
 - Choose **Start Game → Enable Webcam & Ride**, allow camera access, and step back until your shoulders and hips are visible. Use the mirrored skeleton preview to check your pose. Hold steady for the 3–2–1 countdown, then lean left or right to steer. If tracking is lost, the run waits until you're visible again.
