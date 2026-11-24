@@ -22,4 +22,4 @@ The Pages workflow builds the game and publishes only `dist/` on pushes to `main
 
 ## Trail art
 
-Gameplay loads the rider, rock variants, and low-poly pine obstacles from `Models/`. Models load as each run starts, with procedural stand-ins until they are ready. The roadside forest uses instanced 2D snowy pines to reduce rendering cost. The sunny mountain backdrop is `public/sunny-alps.jpg`; the race surface, snowboard, stars and ramps are rendered in Three.js.
+Gameplay loads the rider, rock variants, and low-poly pine obstacles from `Models/`. Models load as each run starts, with procedural stand-ins until they are ready. The roadside forest uses instanced 2D snowy pines to reduce rendering cost. The sunny mountain backdrop is `public/snow-village-wide.jpg` (the menu hero still uses `public/alpine.jpg`); the race surface, snowboard, stars and ramps are rendered in Three.js.
