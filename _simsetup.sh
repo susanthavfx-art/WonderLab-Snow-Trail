@@ -133,7 +133,15 @@ globalThis.document = {
   addEventListener(){}, querySelector: () => new El(), documentElement: new El(), fullscreenElement: null,
 };
 globalThis.devicePixelRatio = 2;
-globalThis.window = { addEventListener(){}, removeEventListener(){} };
+// Keep listeners so tests can drive the rider with synthetic key events.
+const __win = { _k: {}, _u: {}, _b: {},
+  addEventListener(k, f) { (k === 'keydown' ? __win._k : k === 'keyup' ? __win._u : __win._b)[f] = f; },
+  removeEventListener(k, f) { delete (k === 'keydown' ? __win._k : __win._u)[f]; } };
+globalThis.window = __win;
+globalThis.__keys = {
+  down: key => Object.values(__win._k).forEach(f => f({ key, preventDefault(){} })),
+  up: key => Object.values(__win._u).forEach(f => f({ key })),
+};
 globalThis.self = globalThis;
 globalThis.ResizeObserver = class { observe(){} disconnect(){} };
 globalThis.URL.createObjectURL = () => 'blob:stub';
@@ -170,6 +178,7 @@ for (let i = 0; i < 2400; i++) step(16.7);
 const cpu = (Date.now() - t0) / 2400;
 
 const scene = run.debugScene;
+const objects = run.debugObjects;
 let meshes = 0;
 const instanced = [], fence = [], flags = [], branded = new Set();
 scene.traverse(node => {
@@ -200,6 +209,15 @@ for (const f of fence) {
   for (let i = 0; i < f.count; i++) { f.getMatrixAt(i, m); m.decompose(p, q, s); zs.push(p.z); xs.push(p.x); }
   console.log(`fence side x=${xs[0].toFixed(2)} count=${f.count} z ${Math.min(...zs).toFixed(1)}..${Math.max(...zs).toFixed(1)} scaleY=${s.y.toFixed(3)} height=${(s.y * (1.85)).toFixed(2)}m`);
 }
+if (objects) {
+  const rocks = objects.filter(o => o.kind === 'rock').sort((a, b) => b.z - a.z);
+  const lanes = {};
+  for (const r of rocks) lanes[r.lane] = (lanes[r.lane] ?? 0) + 1;
+  const gaps = rocks.slice(1).map((r, i) => Math.round(rocks[i].z - r.z)).filter(g => g > 0);
+  console.log('rocks alive', rocks.length, 'by lane', JSON.stringify(lanes));
+  if (gaps.length) console.log('rock gaps  min', Math.min(...gaps), 'avg', Math.round(gaps.reduce((a,b)=>a+b,0)/gaps.length), 'max', Math.max(...gaps));
+  console.log('gates', objects.filter(o=>o.kind==='gate').length, 'stars', objects.filter(o=>o.kind==='star').length, 'ramps', objects.filter(o=>o.kind==='ramp').length);
+}
 run.stop();
 console.log('dispose ok');
 EOF
@@ -224,8 +242,134 @@ for f in os.listdir('.simtmp'):
 # expose the scene graph for verification (not committed: .simtmp is ignored)
 p = '.simtmp/run.js'
 s = open(p).read()
-s = s.replace("  return {\n    stop() {", "  return {\n    debugScene: scene,\n    stop() {", 1)
+s = s.replace("  return {\n    stop() {", "  return {\n    debugScene: scene,\n    debugObjects: objects,\n    debugRiderX: () => x,\n    stop() {", 1)
 open(p, 'w').write(s)
 PY
+
+cat > .simtmp/density.mjs <<'EOF'
+// How many rocks actually reach the rider, and on which lines?
+import { El } from './fake-dom.mjs';
+const { createRun } = await import('./run.js');
+const run = createRun(new El(), { camera: null, icon: () => '', finish: () => {} });
+let now = 1000, frames = 0;
+let spawned = 0, reached = 0;
+const lanes = {};
+while (frames < 3600) {                       // 60 s
+  now += 16.7; globalThis.__raf.take().forEach(cb => cb(now)); frames++;
+  for (const r of run.debugObjects) {
+    if (r.kind !== 'rock') continue;
+    if (!r.seen) { r.seen = true; spawned++; }
+    if (!r.counted && r.z > -1) { r.counted = true; reached++; lanes[r.lane] = (lanes[r.lane] ?? 0) + 1; }
+  }
+}
+console.log('rocks spawned in 60 s:', spawned, '| reached the rider:', reached, '| lanes', JSON.stringify(lanes));
+run.stop();
+EOF
+
+cat > .simtmp/diag.mjs <<'EOF'
+// Replays the dodge bot and reports what killed it.
+import { El } from './fake-dom.mjs';
+const { createRun } = await import('./run.js');
+let finished = null, lastRocks = [], lastX = 0;
+const run = createRun(new El(), { camera: null, icon: () => '', finish: s => { finished = s; } });
+let now = 1000;
+const step = ms => { now += ms; globalThis.__raf.take().forEach(cb => cb(now)); };
+for (let i = 0; i < 40; i++) { step(16.7); await new Promise(r => setTimeout(r, 15)); }
+const LANES = [-6,-3,0,3,6];
+let frames = 0;
+while (!finished && frames < 7200) {
+  if (frames % 4 === 0) {
+    const rocks = run.debugObjects.filter(o => o.kind === 'rock' && o.z < 4 && o.z > -40);
+    let best = 0, bestScore = -Infinity;
+    for (const lane of LANES) {
+      let score = -Math.abs(lane)*.12;
+      for (const r of rocks) if (Math.abs(r.lane-lane) < 2.2) score -= 120/Math.max(3, Math.abs(r.z));
+      if (score > bestScore) { bestScore = score; best = lane; }
+    }
+    const x = run.debugRiderX();
+    globalThis.__keys.up('ArrowLeft'); globalThis.__keys.up('ArrowRight');
+    if (best < x-.5) globalThis.__keys.down('ArrowLeft');
+    else if (best > x+.5) globalThis.__keys.down('ArrowRight');
+  }
+  lastRocks = run.debugObjects.filter(o => o.kind === 'rock').map(r => ({lane: r.lane, z: +r.z.toFixed(1)}));
+  lastX = run.debugRiderX();
+  step(16.7); frames++;
+}
+if (finished) {
+  const near = lastRocks.filter(r => Math.abs(r.z) < 2.5);
+  console.log('CRASH t=', (frames*16.7/1000).toFixed(1), 'riderX', lastX.toFixed(2), 'near', JSON.stringify(near));
+} else console.log('survived 2 min');
+run.stop();
+EOF
+
+cat > .simtmp/idle.mjs <<'EOF'
+// A rider who never steers should be caught by a rock fairly quickly: that is
+// the "no end" complaint, and it needs to be demonstrably fixed.
+import { El } from './fake-dom.mjs';
+const { createRun } = await import('./run.js');
+let finished = null;
+const run = createRun(new El(), { camera: null, icon: () => '', finish: s => { finished = s; } });
+let now = 1000;
+let frames = 0;
+while (!finished && frames < 7200) { now += 16.7; globalThis.__raf.take().forEach(cb => cb(now)); frames++; }
+console.log(JSON.stringify({ seconds: +(frames * 16.7 / 1000).toFixed(1), ended: finished?.reason ?? 'never ended (bad)', score: finished?.score ?? null }));
+run.stop();
+EOF
+
+cat > .simtmp/first.mjs <<'EOF'
+// Where do the first hazards land? They must not sit in the rider's start lane.
+import { El } from './fake-dom.mjs';
+const { createRun } = await import('./run.js');
+const run = createRun(new El(), { camera: null, icon: () => '', finish: () => {} });
+let now = 1000;
+globalThis.__raf.take().forEach(cb => cb(now));
+const rocks = run.debugObjects.filter(o => o.kind === 'rock').map(r => ({lane: r.lane, z: +r.z.toFixed(1)}));
+console.log('first rocks', JSON.stringify(rocks.slice(0, 5)));
+console.log('any in start lane 0?', rocks.some(r => r.lane === 0) ? 'YES (bad)' : 'no');
+run.stop();
+EOF
+
+cat > .simtmp/dodge.mjs <<'EOF'
+// Balance check: a simple bot that steers away from rocks. If the course is
+// fair it survives a couple of minutes; if hazards are too dense it dies fast.
+import { El } from './fake-dom.mjs';
+const listeners = {};
+const host = new El();
+host.addEventListener = (k, f) => { (listeners[k] ??= []).push(f); };
+const { createRun } = await import('./run.js');
+
+let finished = null;
+const run = createRun(host, { camera: null, icon: () => '', finish: s => { finished = s; } });
+let now = 1000;
+const step = ms => { now += ms; globalThis.__raf.take().forEach(cb => cb(now)); };
+for (let i = 0; i < 40; i++) { step(16.7); await new Promise(r => setTimeout(r, 15)); }
+
+const press = k => globalThis.__keys.down(k);
+const release = k => globalThis.__keys.up(k);
+const LANES = [-6, -3, 0, 3, 6];
+let frames = 0;
+while (!finished && frames < 7200) {          // up to 2 minutes of riding
+  if (frames % 4 === 0) {
+    const rocks = run.debugObjects.filter(o => o.kind === 'rock' && o.z < 4 && o.z > -40);
+    let best = 0, bestScore = -Infinity;
+    for (const lane of LANES) {
+      let score = -Math.abs(lane) * .12;
+      for (const r of rocks) if (Math.abs(r.lane - lane) < 2.2) score -= 120 / Math.max(3, Math.abs(r.z));
+      if (score > bestScore) { bestScore = score; best = lane; }
+    }
+    const x = run.debugRiderX();
+    release('ArrowLeft'); release('ArrowRight');
+    if (best < x - .5) press('ArrowLeft');
+    else if (best > x + .5) press('ArrowRight');
+  }
+  step(16.7); frames++;
+}
+console.log(JSON.stringify({
+  seconds: +(frames * 16.7 / 1000).toFixed(1),
+  ended: finished?.reason ?? 'still riding after 2 min',
+  score: finished?.score ?? null, flags: finished?.flagPasses ?? null,
+}));
+run.stop();
+EOF
 
 echo "harness ready -> node .simtmp/verify.mjs"
