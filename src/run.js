@@ -208,7 +208,9 @@ export function createRun(host, {camera, icon, finish, onReady}) {
 
   const coach = createCoach(host, riderFace);
 
-  const poseView = camera ? createPoseView(camera.video) : null;
+  // Show the very element the tracker sends frames from: a separate preview
+  // video can sit black if the browser stops decoding a detached element.
+  const poseView = camera ? createPoseView(camera.video || camera.stream) : null;
   if (poseView) {
     poseView.panel.classList.add('camera-card');
     poseView.panel.insertAdjacentHTML('beforeend', `<div class="camera-meta"><span class="live-dot"></span><span class="pose-status" role="status">Looking for shoulders &amp; hips…</span></div>`);

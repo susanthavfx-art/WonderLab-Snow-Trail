@@ -1,5 +1,14 @@
 const links=[[11,12],[11,23],[12,24],[23,24],[11,13],[13,15],[12,14],[14,16],[23,25],[25,27],[24,26],[26,28]];
-export function createPoseView(video) {
+export function createPoseView(source) {
+  // Accept either the camera's <video> or the MediaStream it owns. Creating our
+  // own element from the stream means the preview survives the run being torn
+  // down and rebuilt without stealing the element the tracker is drawing from.
+  // Duck-type rather than instanceof: HTMLMediaElement is not defined in every
+  // environment, and a thrown error here would abort the whole run.
+  const isVideo = source && typeof source.play === 'function' && 'videoWidth' in source;
+  const video = isVideo
+    ? source
+    : Object.assign(document.createElement('video'), {muted:true, playsInline:true, srcObject:source});
   const panel=document.createElement('div');
   panel.className='pose-preview';
   video.className='pose-video';
@@ -7,6 +16,8 @@ export function createPoseView(video) {
   overlay.setAttribute('aria-hidden','true');
   panel.append(video,overlay);
   const ctx=overlay.getContext('2d');
+  // Autoplay rules: start muted+inline, and retry once metadata is in.
+  if(video.srcObject) Promise.resolve(video.play?.()).catch(()=>{});
   let previous, wasReady;
   return {panel, draw(landmarks,ready){
     if(landmarks===previous&&ready===wasReady)return;
