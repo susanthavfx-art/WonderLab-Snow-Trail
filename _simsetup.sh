@@ -83,17 +83,22 @@ const FILES = {
 
 export function loadTrailModels(onModel) {
   const loader = new GLTFLoader();
+  const pending = [];
   for (const [kind, file] of Object.entries(FILES)) {
     const buffer = stripTextureGLB(file);
     const ab = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+    pending.push(new Promise(resolve => {
     loader.parse(ab, '', asset => {
       // Keep the original material names: the start gantry is branded by name.
       asset.scene.traverse(node => {
         if (node.isMesh) node.material = new T.MeshStandardMaterial({ name: node.material?.name ?? '' });
       });
       onModel(kind, asset);
-    }, error => console.log('LOAD FAIL', kind, error.message));
+      resolve();
+    }, error => { console.log('LOAD FAIL', kind, error.message); resolve(); });
+    }));
   }
+  return Promise.all(pending);
 }
 EOF
 
@@ -106,6 +111,8 @@ export class El {
   }
   set innerHTML(v) { this._html = v; } get innerHTML() { return this._html; }
   set className(v) { this._cn = v; } get className() { return this._cn || ''; }
+  set width(v) { this._w = v; } get width() { return this._w ?? 0; }
+  set height(v) { this._h = v; } get height() { return this._h ?? 0; }
   append(...c) { this.children.push(...c); } prepend(...c) { this.children.unshift(...c); }
   insertAdjacentHTML() {} setAttribute() {} addEventListener() {}
   querySelector(s) { if (!this._q.has(s)) this._q.set(s, new El()); return this._q.get(s); }
