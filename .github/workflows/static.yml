@@ -27,7 +27,7 @@ jobs:
   deploy:
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url || steps.deployment-retry.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -86,4 +86,13 @@ jobs:
           exit 1
       - name: Deploy to GitHub Pages
         id: deployment
+        continue-on-error: true
         uses: actions/deploy-pages@v5
+      # Pages sometimes answers "Deployment failed, try again later" for a
+      # perfectly good artifact. Give the same artifact one more chance before
+      # the job is called failed.
+      - name: Retry deploy once
+        if: steps.deployment.outcome == 'failure'
+        id: deployment-retry
+        uses: actions/deploy-pages@v5
+
