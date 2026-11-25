@@ -8,14 +8,16 @@ import fence from '../Models/wood_fence (1).glb?url';
 import flag from '../Models/flag_gdrive.glb?url';
 import startLine from '../Models/starting_line.glb?url';
 
+// Resolves once every GLB has settled, so the caller can tell the difference
+// between "the scene exists" and "the real models are in it".
 export function loadTrailModels(onModel) {
   const gltf = new GLTFLoader();
   const entries = {rider: boy, rocks, pines, fence, flag, start: startLine};
-  for (const [kind, url] of Object.entries(entries)) {
+  const loads = Object.entries(entries).map(([kind, url]) =>
     gltf.loadAsync(url).then(asset => onModel(kind, asset)).catch(error => {
       console.warn(`Using fallback for ${kind}:`, error);
-    });
-  }
+    }));
+  return Promise.all(loads);
 }
 
 // Packs are laid out like a display shelf. Extract the individual meshes while

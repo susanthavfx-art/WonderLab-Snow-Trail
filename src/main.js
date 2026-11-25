@@ -4,9 +4,56 @@ const icons=import.meta.glob('/node_modules/lucide-static/icons/{flask-conical,t
 const ic=(name)=>icons[`/node_modules/lucide-static/icons/${name}.svg`]||'';
 let best=0;try{best=+localStorage.getItem('snow-best')||0}catch{}
 const app=document.querySelector('#app');
-app.innerHTML=`<header><div class="brand"><img class="brand-logo" src="/wonderlab-logo-sm.png" alt="" width="40" height="40"><div>Wonder<span>Lab</span><small>AR GAMING</small></div></div><div class="top-actions"><div class="best">${ic('trophy')}<span>BEST SCORE</span><strong id="best">${best}</strong></div><button class="square" id="settings" aria-label="Settings">${ic('settings')}</button></div></header><main><section class="hero" id="hero"><div class="hero-body"><div class="hero-brand"><img src="/wonderlab-logo-sm.png" alt="WonderLab AR" width="52" height="52"><div><strong>WONDER<span>LAB</span></strong><small>AI · 3D · ANIMATION · VIDEO</small></div></div><div class="eyebrow"><i></i> THE MOTION ARCADE</div><h1><span>Motion</span> Snow&nbsp;Rider</h1><p>Carve down the mountain, dodge the rocks, and bank the flag gates. Your body is the controller.</p><div class="actions"><button class="primary" id="start">${ic('play')} Start Game</button><button class="secondary" id="help">${ic('circle-help')} How to Play</button></div><div class="hero-tags"><span>${ic('flag')} FLAG GATES</span><span>${ic('eye')} EYES VIEW</span><span>${ic('video')} MOTION TRACKED</span></div></div></div><div class="hero-art" role="img" aria-label="Snowboarder carving down a snowy mountain trail"></div><div class="hero-panel"><div class="panel-line">${ic('flag')}<div><b>Flag gates</b><small>Ride between the edge flags</small></div></div><div class="panel-line">${ic('star')}<div><b>Gold stars &amp; ramps</b><small>Collect stars, launch the ramps</small></div></div><div class="panel-line">${ic('video')}<div><b>Motion tracked</b><small>Your body is the controller</small></div></div></div><div class="camera-chip"><i></i> <span id="camera-status">Webcam not connected</span></div><span class="trail-label">${ic('mountain-snow')} &nbsp; ALPINE TRAIL 01</span><div id="game" hidden></div></section><section class="guide"><div class="section-title"><h2>Ride basics</h2><span>THREE MOVES. ONE MOUNTAIN.</span></div><div class="cards">${[['move-horizontal','Lean to steer','Tilt your body left or right to carve across the slope.'],['flag','Pass the gates','Ride between the edge flags for +50 points, then steer clear of the rocks.'],['triangle','Hit the ramps','Ride over snow ramps to jump and earn bonus points.']].map(([icon,title,desc],i)=>`<article><div class="card-icon c${i}">${ic(icon)}</div><div><h3>${title}</h3><p>${desc}</p></div></article>`).join('')}</div></section><footer><span>WONDERLAB AR GAMING</span><span>${ic('snowflake')} BUILT FOR THE SLOPES</span></footer></main><dialog id="modal"></dialog>`;
+app.innerHTML=`<header><div class="brand"><img class="brand-logo" src="/wonderlab-logo-sm.png" alt="" width="40" height="40"><div>Wonder<span>Lab</span><small>AR GAMING</small></div></div><div class="top-actions"><div class="best">${ic('trophy')}<span>BEST SCORE</span><strong id="best">${best}</strong></div><button class="square" id="settings" aria-label="Settings">${ic('settings')}</button></div></header><main><section class="hero" id="hero"><img class="hero-img" src="/hero-trail.jpg" alt="WonderLab Motion Snow Rider — the snowboarder carving down a mountain trail lined with flags and fences" width="1672" height="941" fetchpriority="high"><div class="hero-body"><h1 class="sr-only">WonderLab Motion Snow Rider</h1><div class="hero-brand"><img src="/wonderlab-logo-sm.png" alt="" width="52" height="52"><div><strong>WONDER<span>LAB</span></strong><small>AI · 3D · ANIMATION · VIDEO</small></div></div><div class="eyebrow"><i></i> THE MOTION ARCADE</div><p>Carve down the mountain, dodge the rocks, and bank the flag gates. Your body is the controller.</p><div class="actions"><button class="primary" id="start">${ic('play')} Start Game</button><button class="secondary" id="help">${ic('circle-help')} How to Play</button></div><div class="hero-tags"><span>${ic('flag')} FLAG GATES</span><span>${ic('eye')} EYES VIEW</span><span>${ic('video')} MOTION TRACKED</span></div></div><div class="camera-chip"><i></i> <span id="camera-status">Webcam not connected</span></div><span class="trail-label">${ic('mountain-snow')} &nbsp; ALPINE TRAIL 01</span></section><div id="game" hidden></div><section class="guide"><div class="section-title"><h2>Ride basics</h2><span>THREE MOVES. ONE MOUNTAIN.</span></div><div class="cards">${[['move-horizontal','Lean to steer','Tilt your body left or right to carve across the slope.'],['flag','Pass the gates','Ride between the edge flags for +50 points, then steer clear of the rocks.'],['triangle','Hit the ramps','Ride over snow ramps to jump and earn bonus points.']].map(([icon,title,desc],i)=>`<article><div class="card-icon c${i}">${ic(icon)}</div><div><h3>${title}</h3><p>${desc}</p></div></article>`).join('')}</div></section><footer><span>WONDERLAB AR GAMING</span><span>${ic('snowflake')} BUILT FOR THE SLOPES</span></footer></main><div class="loader" id="loader" role="status" aria-live="polite" aria-label="Loading the trail" hidden><div class="loader-stage"><div class="loader-art"></div><i class="loader-fill" id="loader-fill"></i><span class="sr-only" id="loader-label">Loading the trail</span></div></div><dialog id="modal"></dialog>`;
 const $=s=>document.querySelector(s), modal=$('#modal');
 let mode='webcam', run, camera;
+const loader=$('#loader'), loaderFill=$('#loader-fill'), loaderLabel=$('#loader-label');
+// Width of the fill area inside the painted bar, in the loader stage's units.
+const BAR_FILL=38.76;
+// The bar tracks real milestones plus a slow trickle that never reaches 100%,
+// so it is honest about progress without looking frozen while a GLB decodes.
+function showLoader(){
+  const started=performance.now();
+  let done=false, value=0, raf=0, resolve;
+  const promise=new Promise(r=>{resolve=r});
+  loader.hidden=false; loader.classList.remove('done');
+  loader.setAttribute('aria-busy','true');
+  const paint=v=>{
+    value=Math.max(value,Math.min(v,100));
+    const pct=Math.round(value);
+    loaderFill.style.width=(value/100*BAR_FILL)+'%';
+    // The bar itself is the progress readout; keep the percentage for AT only.
+    loaderLabel.textContent=pct>=100?'Trail ready. Starting the run.':'Loading the trail — '+pct+'%';
+  };
+  paint(0);
+  const tick=()=>{
+    if(done)return;
+    const elapsed=performance.now()-started;
+    paint(Math.min(92,elapsed/26));
+    raf=requestAnimationFrame(tick);
+  };
+  raf=requestAnimationFrame(tick);
+  return {
+    promise,
+    resolve(){
+      if(done)return;
+      done=true;
+      cancelAnimationFrame(raf);
+      paint(100);
+      resolve();
+    },
+  };
+}
+function hideLoader(){
+  loader.setAttribute('aria-busy','false');
+  loader.classList.add('done');
+  setTimeout(()=>{
+    loader.hidden=true;
+    loader.classList.remove('done');
+    loaderFill.style.width='0%';
+    loaderLabel.textContent='Loading the trail';
+  },380);
+}
 function show(title,body){modal.innerHTML=`<button class="square close" aria-label="Close">${ic('x')}</button><h2>${title}</h2>${body}`;if(!modal.open)modal.showModal();modal.querySelector('.close').onclick=()=>{cancelStartup();modal.close();};}
 function choose(title='Ready to ride?'){show(title,`<p>Use your webcam to steer with your body, or try keyboard and touch controls without a camera.</p><div class="dialog-actions"><button class="primary" id="motion">${ic('video')} Enable Webcam & Ride</button><button class="secondary" id="manual">Play without webcam</button></div><p class="error" role="status"></p>`);$('#motion').onclick=()=>launch('webcam');$('#manual').onclick=()=>launch('manual');}
 $('#start').onclick=()=>choose();
@@ -44,21 +91,36 @@ async function launch(input) {
       $('#camera-status').textContent='Webcam connected';
     }
     const game=$('#game');
-    game.hidden=false;
-    document.body.classList.add('playing');$('#hero').classList.add('playing');
-    run=createRun(game,{camera,icon:ic,finish:finishRun});
-    startup=null;
+    // Cover the hand-over from the landing page with the loading screen, then
+    // build the run behind it so the first visible frame is the real trail.
     modal.close();
+    const ready=showLoader();
+    // Let the browser paint the loading screen before the scene build blocks the
+    // thread, otherwise the poster can flash past for a frame.
+    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+    try {
+      game.hidden=false;
+      document.body.classList.add('playing');
+      run=createRun(game,{camera,icon:ic,finish:finishRun,onReady:ready.resolve});
+    } catch(error) {
+      ready.resolve();
+      hideLoader();
+      throw error;
+    }
+    startup=null;
+    await ready.promise;
+    hideLoader();
   } catch(e) {
     if(startup!==attempt)return;
     camera?.stop();
     camera=null;
     cancelStartup();
     $('#game').hidden=true;
-    document.body.classList.remove('playing');$('#hero').classList.remove('playing');
+    document.body.classList.remove('playing');
+    hideLoader();
     if(!modal.open)choose('Could not start the run');
     $('#motion').disabled=false;
     modal.querySelector('.error').textContent=e.message||'Try again or play without the webcam.';
   }
 }
-function finishRun(stats){run?.stop();run=null;camera?.stop();camera=null;$('#camera-status').textContent='Webcam not connected';$('#game').hidden=true;document.body.classList.remove('playing');$('#hero').classList.remove('playing');if(!stats)return;if(stats.score>best){best=stats.score;$('#best').textContent=best;try{localStorage.setItem('snow-best',best)}catch{}}choose(stats.reason);modal.querySelector('h2').insertAdjacentHTML('afterend',`<div class="results"><strong>${stats.score} pts</strong><span>${stats.stars} stars · ${stats.distance} m · ${stats.jumps} jumps</span></div>`);}
+function finishRun(stats){run?.stop();run=null;camera?.stop();camera=null;$('#camera-status').textContent='Webcam not connected';$('#game').hidden=true;document.body.classList.remove('playing');hideLoader();if(!stats)return;if(stats.score>best){best=stats.score;$('#best').textContent=best;try{localStorage.setItem('snow-best',best)}catch{}}choose(stats.reason);modal.querySelector('h2').insertAdjacentHTML('afterend',`<div class="results"><strong>${stats.score} pts</strong><span>${stats.stars} stars · ${stats.distance} m · ${stats.jumps} jumps</span></div>`);}
