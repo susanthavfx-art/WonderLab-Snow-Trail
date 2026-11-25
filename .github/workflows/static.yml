@@ -90,9 +90,10 @@ jobs:
         uses: actions/deploy-pages@v5
       # Pages sometimes answers "Deployment failed, try again later" for a
       # perfectly good artifact. Give the same artifact one more chance before
-      # the job is called failed.
+      # the job is called failed. Note the condition reads the *conclusion*:
+      # continue-on-error keeps the step flagged successful even when it failed.
       - name: Retry deploy once
-        if: steps.deployment.outcome == 'failure'
+        if: steps.deployment.conclusion != 'success'
         id: deployment-retry
         uses: actions/deploy-pages@v5
 
