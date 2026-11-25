@@ -40,13 +40,18 @@ function showLoader(){
     loaderLabel.textContent=pct>=100?'Trail ready. Starting the run.':'Loading the trail — '+pct+'%';
   };
   paint(0);
+  // The trickle is a hint, not a measurement: it eases towards 90% over ~8s and
+  // then holds, so the bar never sprints to 100% and vanishes before the real
+  // assets are in (which is what made the screen look like it flashed past).
   const tick=()=>{
     if(done)return;
     const elapsed=performance.now()-started;
-    paint(Math.min(92,elapsed/26));
+    const trickle=90*(1-Math.exp(-elapsed/5200));
+    paint(trickle);
     raf=requestAnimationFrame(tick);
   };
   raf=requestAnimationFrame(tick);
+  // Give the bar a beat at 100% so the hand-over reads as finished, not skipped.
   return {
     promise,
     resolve(){
@@ -54,9 +59,35 @@ function showLoader(){
       done=true;
       cancelAnimationFrame(raf);
       paint(100);
-      resolve();
+      setTimeout(resolve,220);
     },
   };
+}
+// Anything that throws while the run is being built or played has to end up in
+// front of the player. Silently dropping out of full screen (which is what an
+// uncaught error inside the run did) looks exactly like "the game never loaded".
+function clearFatal(){fatalShown=false;}
+let fatalShown=false;
+function reportFatal(error){
+  if(fatalShown)return;
+  fatalShown=true;
+  console.error('Run failed', error);
+  if(run){run.stop();run=null;}
+  camera?.stop();camera=null;
+  $('#game').hidden=true;
+  document.body.classList.remove('playing');
+  hideLoader();
+  choose('The run could not start');
+  const box=modal.querySelector('.error');
+  if(box)box.textContent=(error&&error.message)||'Something went wrong while starting the game. Try again, or play without a webcam.';
+}
+function watchForFatal(){
+  window.addEventListener('error',event=>{
+    if(run||document.body.classList.contains('playing'))reportFatal(event.error||event.message);
+  });
+  window.addEventListener('unhandledrejection',event=>{
+    if(run||document.body.classList.contains('playing'))reportFatal(event.reason);
+  });
 }
 function hideLoader(){
   loader.setAttribute('aria-busy','false');
@@ -117,6 +148,7 @@ async function launch(input) {
     // Cover the hand-over from the landing page with the loading screen, then
     // build the run behind it so the first visible frame is the real trail.
     modal.close();
+    clearFatal();
     const ready=showLoader();
     // Let the browser paint the loading screen before the scene build blocks the
     // thread, otherwise the poster can flash past for a frame.
@@ -131,7 +163,15 @@ async function launch(input) {
       throw error;
     }
     startup=null;
-    await ready.promise;
+    watchForFatal();
+    // Safety net: if a model request stalls, give up waiting rather than leaving
+    // the loading screen up forever — the run simply starts with whatever loaded.
+    const timedOut=await Promise.race([
+      ready.promise.then(()=>false),
+      new Promise(r=>setTimeout(()=>r(true),20000)),
+    ]);
+    if(timedOut)console.warn('Assets were still loading after 20s; starting the run anyway.');
+    ready.resolve();
     hideLoader();
   } catch(e) {
     if(startup!==attempt)return;
@@ -146,4 +186,14 @@ async function launch(input) {
     modal.querySelector('.error').textContent=e.message||'Try again or play without the webcam.';
   }
 }
-function finishRun(stats){run?.stop();run=null;camera?.stop();camera=null;$('#camera-status').textContent='Webcam not connected';$('#game').hidden=true;document.body.classList.remove('playing');hideLoader();if(!stats)return;if(stats.score>best){best=stats.score;$('#best').textContent=best;try{localStorage.setItem('snow-best',best)}catch{}}choose(stats.reason);modal.querySelector('h2').insertAdjacentHTML('afterend',`<div class="results"><strong>${stats.score} pts</strong><span>${stats.stars} stars · ${stats.distance} m · ${stats.jumps} jumps</span></div>`);}
+function finishRun(stats){run?.stop();run=null;camera?.stop();camera=null;$('#camera-status').textContent='Webcam not connected';$('#game').hidden=true;document.body.classList.remove('playing');hideLoader();if(!stats)return;
+  // A run that dies before the player ever rode (tracking dropped during load)
+  // used to drop back to the landing page with nothing on screen.
+  if(!stats.started){
+    const tracking=/webcam|tracking|camera/i.test(stats.reason||'');
+    const why=tracking?'The webcam tracking stopped before the run began. Check that your whole body is in frame, then retry — or play without a webcam.':
+      'The run ended before you got going. Try again, or play without a webcam.';
+    choose(tracking?'Webcam tracking stopped':stats.reason||'Run ended');
+    modal.querySelector('h2').insertAdjacentHTML('afterend',`<div class="results"><strong>0 pts</strong><span>${why}</span></div>`);
+    return;
+  }if(stats.score>best){best=stats.score;$('#best').textContent=best;try{localStorage.setItem('snow-best',best)}catch{}}choose(stats.reason);modal.querySelector('h2').insertAdjacentHTML('afterend',`<div class="results"><strong>${stats.score} pts</strong><span>${stats.stars} stars · ${stats.distance} m · ${stats.jumps} jumps</span></div>`);}

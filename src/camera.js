@@ -130,5 +130,9 @@ export async function startCamera({signal, onStatus = () => {}}) {
     if (active && !failed) frame = requestAnimationFrame(tick);
   }
   frame = requestAnimationFrame(tick);
+  // A track that ends on its own (device unplugged, another app grabbed the
+  // camera, the tab was backgrounded on mobile) leaves pose.send() throwing on
+  // every frame. Without this the run died the moment the loader went away.
+  stream.getVideoTracks().forEach(track=>track.addEventListener('ended',()=>{failed=true;stop();},{once:true}));
   return {video,stop,get landmarks(){return landmarks},get locked(){return this.ready&&validPose},get failed(){return failed||!stream.getVideoTracks().some(t=>t.readyState==='live')},get ready(){return !this.failed&&seen>0&&performance.now()-seen<750},get lean(){return this.ready?lean:0}};
 }

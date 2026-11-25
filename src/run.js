@@ -267,7 +267,7 @@ export function createRun(host, {camera, icon, finish, onReady}) {
   const objects = [];
   let distance = 0, stars = 0, jumps = 0, flags = 0, x = 0, velocity = 0, jump = -1;
   let nextRow = 26, flash = 0, row = 0, elapsed = 0, last = performance.now(), frame, stopped = false;
-  let sceneReady = false, rideClock = 0, clockMark = performance.now();
+  let sceneReady = false, rideClock = 0, clockMark = performance.now(), cameraDownSince = 0;
 
   function spawn(kind, lane, z) {
     const g = new T.Group();
@@ -384,8 +384,10 @@ export function createRun(host, {camera, icon, finish, onReady}) {
     packs[kind] = pieces(asset.scene, kind === 'rocks' ? (() => true) : (name => name.startsWith('Tree_Pine_Snowy_')));
     if (kind === 'rocks') trailside.forEach(({g, height, angle, index}) => decorate(g, kind, height, angle, index));
     objects.filter(o => o.kind === 'rock').forEach(o => decorate(o.g, 'rocks', 1.35, o.variant * .63, o.variant));
-  }).then(() => { modelsDone = true; reportReady(); });
-  horizon.ready.then(() => { horizonDone = true; reportReady(); });
+  }).then(() => { modelsDone = true; reportReady(); })
+    // Never let a loader that resolves oddly leave the plate spinning.
+    .catch(error => { console.warn('Model loading failed', error); reportReady(); });
+  Promise.resolve(horizon.ready).then(() => { horizonDone = true; reportReady(); });
 
   // ---- Uploaded props ------------------------------------------------------
   // Fences: 22.6m of rail per piece, repeated down both sides of the trail and
@@ -554,17 +556,42 @@ export function createRun(host, {camera, icon, finish, onReady}) {
 
   const stats = reason => ({
     reason,
+    // A run that never got past the start line: the caller shows a retry message
+    // instead of a results card for a game the player never played.
+    started: distance > 1,
     score: Math.floor(distance) + stars * 100 + jumps * 150 + flags * GATE_SCORE,
     stars, flagPasses: flags, distance: Math.floor(distance), jumps,
   });
 
+  let crashing = false;
   function animate(now) {
-    if (stopped) return;
+    if (stopped || crashing) return;
+    try {
+      step(now);
+    } catch (error) {
+      // A single bad frame used to stop the loop for good: the loader was already
+      // gone, so the player just sat on a frozen scene. Fail visibly instead —
+      // guarded so a throw inside finish() cannot re-enter this handler.
+      if (crashing) return;
+      crashing = true;
+      console.error('Run stopped by an error', error);
+      try { finish(stats('The run hit a problem')); }
+      catch (nested) { console.error('Could not report the failure cleanly', nested); finish(null); }
+    }
+  }
+
+  function step(now) {
     // Nothing moves (and no countdown runs) until the real assets are in, so the
     // player never sees dummy props behind the loading screen.
     const dt = sceneReady ? Math.min(.05, (now - last) / 1e3) : 0;
     last = now;
-    if (camera?.failed) { finish(stats('Webcam tracking stopped')); return; }
+    // One dropped frame is not a reason to kill a run: wait until tracking has
+    // been down for a moment, so a brief inference hiccup cannot end the game
+    // the instant the loading screen goes away.
+    if (camera?.failed) {
+      if (!cameraDownSince) cameraDownSince = now;
+      if (now - cameraDownSince > 2500) { finish(stats('Webcam tracking stopped')); return; }
+    } else cameraDownSince = 0;
     if (sceneReady) rideClock += (now - clockMark) * .001;
     clockMark = now;
     const phase = gate(camera?.locked, rideClock * 1000, camera?.ready), ready = phase.ride;
