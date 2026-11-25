@@ -3,13 +3,13 @@ let loading;
 function loadPose() {
   return loading ||= new Promise((resolve, reject) => {
     const script = document.createElement('script');
-    const fail = () => {
+    const fail = (error) => {
       clearTimeout(timer);
       script.remove();
       loading = null;
-      reject(Error('Could not load pose tracking'));
+      reject(error instanceof Error ? error : Error('Could not load pose tracking'));
     };
-    const timer = setTimeout(fail, 15000);
+    const timer = setTimeout(() => fail(Error('Timed out loading the pose tracker script.')), 15000);
     script.src = poseScript;
     script.onload = () => {
       if (typeof window.Pose !== 'function') return fail();
@@ -20,7 +20,14 @@ function loadPose() {
     document.head.append(script);
   });
 }
-const assets=import.meta.glob('/node_modules/@mediapipe/pose/{pose_web.binarypb,pose_solution*,pose_landmark_lite.tflite}',{eager:true,query:'?url',import:'default'});
+// MediaPipe fetches these by bare filename at runtime through locateFile, so the
+// build has to emit every one of them. The wasm glue (.js/.wasm) and the packed
+// assets loader were missing, which left initialize() waiting forever on the
+// deployed site even though the camera had already opened.
+// Only the lite landmark model is imported: the pose graph runs with
+// modelComplexity 0, so the 27MB full/heavy weights would never be fetched.
+const assets=import.meta.glob('/node_modules/@mediapipe/pose/{pose_web.binarypb,pose_landmark_lite.tflite,pose_solution*,*.wasm}',{eager:true,query:'?url',import:'default'});
+const assetUrl=name=>assets[`/node_modules/@mediapipe/pose/${name}`];
 function waitFor(task, signal, ms, message) {
   return new Promise((resolve, reject) => {
     const finish = (settle, value) => {
@@ -76,7 +83,11 @@ export async function startCamera({signal, onStatus = () => {}}) {
       if (!active) return;
       const Pose = await loadPose();
       if (!active) return;
-      pose = new Pose({locateFile:name=>assets[`/node_modules/@mediapipe/pose/${name}`]});
+      pose = new Pose({locateFile:name=>{
+        const url=assetUrl(name);
+        if(!url) console.warn('Missing pose asset', name);
+        return url||name;
+      }});
       pose.setOptions({modelComplexity:0,smoothLandmarks:true,enableSegmentation:false});
       pose.onResults(({poseLandmarks:p})=>{
         if(!active)return;
@@ -95,7 +106,10 @@ export async function startCamera({signal, onStatus = () => {}}) {
       try { await pose.initialize(); }
       finally { busy = false; if (!active) closePose(); }
     };
-    await waitFor(initialize().catch(() => { throw Error('Motion tracking could not start. Try again or play without a webcam.'); }), signal, 25000, 'Motion tracking timed out. Try again or play without a webcam.');
+    await waitFor(initialize().catch(error => {
+      console.error(error);
+      throw Error('Motion tracking could not start. Try again or play without a webcam.');
+    }), signal, 30000, 'Motion tracking took too long to start. Check your connection, or play without a webcam.');
     signal.throwIfAborted();
   } catch (error) { stop(); throw error; }
   async function tick(now) {
