@@ -96,4 +96,30 @@ jobs:
         if: steps.deployment.conclusion != 'success'
         id: deployment-retry
         uses: actions/deploy-pages@v5
+      # The deploy step can report success while the CDN still serves the previous
+      # build (or a partially published one). Fetch the live page, read the bundle
+      # name it points at, and require that exact file to come back 200. Without
+      # this, a stale deploy looks green and the browser keeps loading old code.
+      - name: Verify the live site serves this build
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url || steps.deployment-retry.outputs.page_url }}
+        run: |
+          set -u
+          for attempt in $(seq 1 20); do
+            html=$(curl -fsS -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$PAGE_URL?deploy=$GITHUB_SHA" || true)
+            bundle=$(printf '%s' "$html" | grep -o 'assets/index-[A-Za-z0-9_-]*\.js' | head -n1)
+            if [ -n "$bundle" ]; then
+              code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Cache-Control: no-cache' "${PAGE_URL}${bundle#./}")
+              echo "Attempt $attempt: page references $bundle -> HTTP $code"
+              if [ "$code" = "200" ]; then
+                echo "Live site is serving the current build."
+                exit 0
+              fi
+            else
+              echo "Attempt $attempt: could not find a bundle reference in the served HTML"
+            fi
+            sleep 15
+          done
+          echo "::error::The live site never served this build. The CDN is stale or the upload was incomplete."
+          exit 1
 
