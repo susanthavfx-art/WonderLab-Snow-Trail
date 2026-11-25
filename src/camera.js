@@ -114,6 +114,9 @@ export async function startCamera({signal, onStatus = () => {}}) {
   } catch (error) { stop(); throw error; }
   async function tick(now) {
     if (!active) return;
+    // If the browser stalled the element (tab backgrounded, autoplay policy) the
+    // preview goes black and no landmarks are produced. Nudge it back to life.
+    if (video.paused && video.srcObject) video.play().catch(() => {});
     if (now >= nextFrame && video.readyState >= 2 && video.currentTime !== last) {
       nextFrame = now + 64;
       last = video.currentTime;
@@ -134,5 +137,5 @@ export async function startCamera({signal, onStatus = () => {}}) {
   // camera, the tab was backgrounded on mobile) leaves pose.send() throwing on
   // every frame. Without this the run died the moment the loader went away.
   stream.getVideoTracks().forEach(track=>track.addEventListener('ended',()=>{failed=true;stop();},{once:true}));
-  return {video,stop,get landmarks(){return landmarks},get locked(){return this.ready&&validPose},get failed(){return failed||!stream.getVideoTracks().some(t=>t.readyState==='live')},get ready(){return !this.failed&&seen>0&&performance.now()-seen<750},get lean(){return this.ready?lean:0}};
+  return {video,stream,stop,get landmarks(){return landmarks},get locked(){return this.ready&&validPose},get failed(){return failed||!stream.getVideoTracks().some(t=>t.readyState==='live')},get ready(){return !this.failed&&seen>0&&performance.now()-seen<750},get lean(){return this.ready?lean:0}};
 }

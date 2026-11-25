@@ -110,8 +110,13 @@ function cancelStartup() {
   startup=null;
   if(!camera) $('#camera-status').textContent='Webcam not connected';
 }
-modal.addEventListener('close',()=>{if(!modal.open)cancelStartup();});
-modal.addEventListener('cancel',cancelStartup);
+// Closing the dialog aborts an in-flight startup, but must never touch a camera
+// that a live run is using: the dialog is closed as part of handing over to the
+// game, and aborting there killed the webcam the instant the run began (camera
+// light off, black preview, "tracking stopped").
+const closeCleanup=()=>{if(!modal.open&&!run)cancelStartup();};
+modal.addEventListener('close',closeCleanup);
+modal.addEventListener('cancel',()=>{if(!run)cancelStartup();});
 window.addEventListener('pagehide',()=>{cancelStartup();if(camera)finishRun(null);});
 // Pages keeps serving a cached index.html after a deploy, which points at bundle
 // files that no longer exist. When that happens, drop the cache and load again.
@@ -124,7 +129,7 @@ window.addEventListener('vite:preloadError',event=>{
 console.info('WonderLab Snow Rider build', BUILD_VERSION);
 async function launch(input) {
   if(run || (startup && input==='webcam')) return;
-  cancelStartup();
+  if(!camera)cancelStartup();
   mode=input;
   const attempt=new AbortController();
   startup=attempt;
@@ -140,14 +145,17 @@ async function launch(input) {
       const {startCamera}=await import('./camera.js');
       if(startup!==attempt||!modal.open)return;
       const cam=await startCamera({signal:attempt.signal,onStatus});
-      if(startup!==attempt||!modal.open){cam.stop();return;}
+      if(startup!==attempt){cam.stop();return;}
       camera=cam;
+      // Hand-over: from here the run owns the camera, so a late dialog event
+      // cannot abort the stream out from under it.
+      startup=null;
       $('#camera-status').textContent='Webcam connected';
     }
     const game=$('#game');
     // Cover the hand-over from the landing page with the loading screen, then
     // build the run behind it so the first visible frame is the real trail.
-    modal.close();
+    if(modal.open)modal.close();
     clearFatal();
     const ready=showLoader();
     // Let the browser paint the loading screen before the scene build blocks the
@@ -182,11 +190,12 @@ async function launch(input) {
     document.body.classList.remove('playing');
     hideLoader();
     if(!modal.open)choose('Could not start the run');
-    $('#motion').disabled=false;
-    modal.querySelector('.error').textContent=e.message||'Try again or play without the webcam.';
+    const motionBtn=$('#motion'); if(motionBtn)motionBtn.disabled=false;
+    const errorBox=modal.querySelector('.error');
+    if(errorBox)errorBox.textContent=e.message||'Try again or play without the webcam.';
   }
 }
-function finishRun(stats){run?.stop();run=null;camera?.stop();camera=null;$('#camera-status').textContent='Webcam not connected';$('#game').hidden=true;document.body.classList.remove('playing');hideLoader();if(!stats)return;
+function finishRun(stats){run?.stop();run=null;camera?.stop();camera=null;$('#game').replaceChildren();$('#camera-status').textContent='Webcam not connected';$('#game').hidden=true;document.body.classList.remove('playing');hideLoader();if(!stats)return;
   // A run that dies before the player ever rode (tracking dropped during load)
   // used to drop back to the landing page with nothing on screen.
   if(!stats.started){
@@ -194,6 +203,6 @@ function finishRun(stats){run?.stop();run=null;camera?.stop();camera=null;$('#ca
     const why=tracking?'The webcam tracking stopped before the run began. Check that your whole body is in frame, then retry — or play without a webcam.':
       'The run ended before you got going. Try again, or play without a webcam.';
     choose(tracking?'Webcam tracking stopped':stats.reason||'Run ended');
-    modal.querySelector('h2').insertAdjacentHTML('afterend',`<div class="results"><strong>0 pts</strong><span>${why}</span></div>`);
+    modal.querySelector('h2').insertAdjacentHTML('afterend',`<div class="results"><span>${why}</span></div>`);
     return;
   }if(stats.score>best){best=stats.score;$('#best').textContent=best;try{localStorage.setItem('snow-best',best)}catch{}}choose(stats.reason);modal.querySelector('h2').insertAdjacentHTML('afterend',`<div class="results"><strong>${stats.score} pts</strong><span>${stats.stars} stars · ${stats.distance} m · ${stats.jumps} jumps</span></div>`);}
