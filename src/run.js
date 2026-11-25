@@ -16,7 +16,12 @@ import startBrand from './textures/wonderlab-start.jpg?url';
 import startAd from './textures/wonderlab-start-ad.jpg?url';
 
 const LANES = [-6, -3, 0, 3, 6];
-const GATE_HALF = 1.55;
+// Flag pairs sit just inside the fence line; the gate strip spans the trail.
+const EDGE = 7.4;
+// Bonus is lost only by hugging the fence, i.e. riding outside the flags.
+const GATE_PASS = EDGE - .7;
+// Clear runway at the start: no hazards while the countdown and first metres play.
+const HAZARD_START = 55;
 const GATE_SCORE = 50;
 // Flag gates alternate palettes so the course reads as a WonderLab race track.
 const GATE_PALETTES = [
@@ -272,7 +277,7 @@ export function createRun(host, {camera, icon, finish}) {
       mesh(g, 'rock', 0xeaf7ff, .04, 1.02, .03, .83, .5, .62);
     }
     if (kind === 'gate') {
-      mesh(g, 'box', 0xbfefff, 0, .012, 0, GATE_HALF * 2, .006, .5);
+      mesh(g, 'box', 0xbfefff, 0, .012, 0, EDGE * 1.9, .006, .5);
     }
     if (kind === 'star') mesh(g, 'star', 0xffc229, 0, 1.0, 0, .52, .52, .52);
     if (kind === 'ramp') {
@@ -461,15 +466,15 @@ export function createRun(host, {camera, icon, finish}) {
     const build = (colour, side) => {
       const piece = flagPiece(colour);
       if (piece) {
-        piece.position.set(side * GATE_HALF, 0, 0);
+        piece.position.set(side * EDGE, 0, 0);
         // Mirror the right-hand flag so both face across the trail.
         piece.rotation.y = side > 0 ? Math.PI : 0;
         o.g.add(piece);
         return;
       }
       // Fallback feather flag until the uploaded model arrives.
-      const pole = mesh(o.g, 'pole', 0xdff0ff, side * GATE_HALF, 1.05, 0, 1, 2.1, 1);
-      const cloth = mesh(o.g, 'flag', paletteColour(colour), side * GATE_HALF, 1.75, 0, 1, 1, 1);
+      const pole = mesh(o.g, 'pole', 0xdff0ff, side * EDGE, 1.05, 0, 1, 2.1, 1);
+      const cloth = mesh(o.g, 'flag', paletteColour(colour), side * EDGE, 1.75, 0, 1, 1, 1);
       cloth.material = new T.MeshStandardMaterial({color: paletteColour(colour), side: T.DoubleSide, roughness: .7});
       cloth.rotation.y = side > 0 ? Math.PI : 0;
       o.fallback = [pole, cloth];
@@ -489,18 +494,48 @@ export function createRun(host, {camera, icon, finish}) {
     return list;
   };
 
-  const OUTER = [-6, 6];
+  // Hazards are the only thing that can end a run, so they now come at the
+  // rider continuously instead of once in a while on the very outside lanes.
+  // Spacing is measured in seconds of travel rather than metres, so it stays
+  // dodgeable as the run speeds up: about 2.8 s of clear road between hazards
+  // at the start, closing to 2.1 s once the rider is deep into the course.
+  const hazardSpeed = d => Math.min(32, 15 + d * .012);
+  const hazardSpacing = () => hazardSpeed(distance) * Math.max(2.1, 2.8 - distance / 700);
 
-  // A flag gate opens on every row, so clean passes are always available. The
-  // road is never blocked across its middle: trees are scenery only, the ice
-  // balls are gone, and rocks only ever sit on the outer lanes.
+  // Stars and ramps claim their spot so a rock never lands right on top of
+  // them: the marked line stays rideable. Only spots still ahead of the rider
+  // matter, so the list is pruned instead of growing for the whole run.
+  let safeSpots = [];
+  function pruneSafeSpots() {
+    if (safeSpots.length > 24) safeSpots = safeSpots.filter(spot => spot.z > distance - 150);
+  }
+
+  function clearLane(lane, z) {
+    return !safeSpots.some(spot => (spot.lane === lane || Math.abs(spot.lane - lane) < 1.5) && Math.abs(spot.z - z) < 6.5);
+  }
+
+  // Front of the stream: the first hazard sits HAZARD_START metres into the
+  // course, then the road is seeded a gap at a time.
+  let hazardZ = -HAZARD_START;
+
+  function addHazard(z) {
+    const lanes = LANES.filter(lane => clearLane(lane, z));
+    if (!lanes.length) return;
+    // Spread the rocks over the whole width, centre lane included: a hazard is
+    // equally likely on any line, so holding still is never the safe answer.
+    const lane = lanes[Math.floor(Math.random() * lanes.length)];
+    spawn('rock', lane, z);
+    pruneSafeSpots();
+  }
+
   function addRow(d) {
     const z = distance - d;
     const lane = shuffled();
     spawn('gate', row === 0 ? 0 : lane[0], z);
-    spawn('star', row === 0 ? 0 : lane[0], z - 4);
-    if (row % 3 === 1) spawn('ramp', lane[1], z - 8);
-    if (row > 2 && row % 2 === 1) spawn('rock', OUTER[row % 2], z - 11);
+    if (row % 3 === 1) { spawn('ramp', lane[1], z - 8); safeSpots.push({lane: lane[1], z: z - 8}); }
+    // Stars thread the gap: one a few metres after the row, on a lane that is
+    // kept clear of rocks so the eye can follow the safe line.
+    if (row > 0) { spawn('star', lane[1], z - 5); safeSpots.push({lane: lane[1], z: z - 5}); }
     row++;
   }
 
@@ -520,6 +555,9 @@ export function createRun(host, {camera, icon, finish}) {
     distance += speed * dt;
     elapsed += dt;
     while (nextRow < distance + 130) { addRow(nextRow); nextRow += Math.max(19, 27 - distance * .007); }
+    // Hazard stream: push the front out past the fog line, one gap at a time.
+    // hazardZ only ever decreases (further down the trail), so this cannot spin.
+    while (-hazardZ < distance + 130) { addHazard(hazardZ); hazardZ -= hazardSpacing(); }
 
     if (status && status.textContent !== phase.status) status.textContent = phase.status;
     poseView?.draw(camera.ready ? camera.landmarks : null, camera.locked);
@@ -572,7 +610,7 @@ export function createRun(host, {camera, icon, finish}) {
         const off = Math.abs(o.g.position.x - x);
         if (o.kind === 'gate') {
           o.used = true;
-          if (off < GATE_HALF - .35) {
+          if (off < GATE_PASS) {
             flags++;
             snowfall.flurry(.6);
             flash = now + 1100;
@@ -584,7 +622,8 @@ export function createRun(host, {camera, icon, finish}) {
         } else if (o.kind === 'ramp') {
           if (off < 1.13 && jump < 0) { jump = 0; jumps++; flash = now + 1000; message.dataset.kind = 'ramp'; snowfall.flurry(1.1); }
         } else if (height < 1.29 && off < 1.2) {
-          finish(stats('Run complete!'));
+          // Only a rock can end a run: jumping clears it, steering dodges it.
+          finish(stats('You hit a rock!'));
           return;
         }
       }
