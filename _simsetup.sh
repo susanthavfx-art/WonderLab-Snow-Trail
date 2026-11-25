@@ -5,7 +5,7 @@
 # game loop on a fake DOM and reports what ended up in the scene graph.
 set -e
 rm -rf .simtmp && mkdir -p .simtmp
-cp src/{run,coach,ride-gate,pose-view,cartoon-pines,sky-traffic,crowd,snowfall,backdrop,trail-textures}.js .simtmp/
+cp src/{run,coach,ride-gate,pose-view,cartoon-pines,sky-traffic,snowfall,backdrop,trail-textures}.js .simtmp/
 cp src/models.js .simtmp/models-src.mjs
 
 cat > .simtmp/three-shim.js <<'EOF'
