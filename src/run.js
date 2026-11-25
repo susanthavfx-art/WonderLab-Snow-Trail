@@ -4,7 +4,6 @@ import {createRideGate} from './ride-gate.js';
 import {createSideForest} from './cartoon-pines.js';
 import {createSkyTraffic} from './sky-traffic.js';
 import {createHorizon} from './backdrop.js';
-import {createCrowd} from './crowd.js';
 import {createSnowfall} from './snowfall.js';
 import {loadTrailModels, pieces, instance, fitScene, mergeMeshes, disposeModel} from './models.js';
 import riderFace from './rider-face.jpg';
@@ -108,7 +107,6 @@ export function createRun(host, {camera, icon, finish}) {
   const forest = createSideForest(scene);
   const sky = createSkyTraffic(scene);
   const horizon = createHorizon(scene);
-  const crowd = createCrowd(scene);
   const snowfall = createSnowfall(scene);
 
   // Wooden fence pieces line both trail edges, and the three uploaded props
@@ -528,7 +526,6 @@ export function createRun(host, {camera, icon, finish}) {
 
     if (speed) forest.advance(distance);
     sky.advance(now * .001);
-    crowd.advance(distance, now);
     snowfall.advance(dt, now, speed, speed);
     // Fences and the repeated start gantries scroll with the run.
     if (speed) updateFences(speed * dt);
@@ -577,7 +574,6 @@ export function createRun(host, {camera, icon, finish}) {
           o.used = true;
           if (off < GATE_HALF - .35) {
             flags++;
-            crowd.cheer();
             snowfall.flurry(.6);
             flash = now + 1100;
             message.dataset.kind = 'flag';
@@ -629,7 +625,6 @@ export function createRun(host, {camera, icon, finish}) {
         fence.material.dispose();
         fence.dispose();
       }
-      crowd.dispose();
       snowfall.dispose();
       mixer?.stopAllAction();
       modelScenes.forEach(disposeModel);
