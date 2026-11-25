@@ -64,6 +64,26 @@ jobs:
         uses: actions/upload-pages-artifact@v5
         with:
           path: dist
+      # The upload above finishes a moment before the artifact is queryable, and
+      # deploy-pages fails outright if it does not see it yet. Wait for it.
+      - name: Wait for the Pages artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          for attempt in $(seq 1 30); do
+            id=$(gh api "repos/$REPO/actions/runs/$RUN_ID/artifacts?per_page=100" \
+              --jq '.artifacts[] | select(.name == "github-pages") | .id' | head -n1)
+            if [ -n "$id" ]; then
+              echo "Found github-pages artifact $id"
+              exit 0
+            fi
+            echo "Waiting for the github-pages artifact ($attempt/30)"
+            sleep 4
+          done
+          echo "Artifact never appeared" >&2
+          exit 1
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
