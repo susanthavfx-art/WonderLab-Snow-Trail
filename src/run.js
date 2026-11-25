@@ -31,7 +31,7 @@ const GATE_PALETTES = [
   {left: 'gold', right: 'green'},
 ];
 
-export function createRun(host, {camera, icon, finish}) {
+export function createRun(host, {camera, icon, finish, onReady}) {
   const renderer = new T.WebGLRenderer({antialias: true, alpha: true});
   renderer.setPixelRatio(Math.min(devicePixelRatio, camera ? 1 : 1.25));
   renderer.setClearColor(0x0a6fbe, 0);
@@ -267,6 +267,7 @@ export function createRun(host, {camera, icon, finish}) {
   const objects = [];
   let distance = 0, stars = 0, jumps = 0, flags = 0, x = 0, velocity = 0, jump = -1;
   let nextRow = 26, flash = 0, row = 0, elapsed = 0, last = performance.now(), frame, stopped = false;
+  let sceneReady = false, rideClock = 0, clockMark = performance.now();
 
   function spawn(kind, lane, z) {
     const g = new T.Group();
@@ -290,7 +291,18 @@ export function createRun(host, {camera, icon, finish}) {
     if (kind === 'gate') { decorateGate(o); o.decorated = true; }
   }
 
-  loadTrailModels((kind, asset) => {
+  let readyReported = false, modelsDone = false, horizonDone = false;
+  function reportReady() {
+    if (readyReported || !modelsDone || !horizonDone) return;
+    readyReported = true;
+    sceneReady = true;
+    onReady?.();
+  }
+
+  // The first usable frame is the one where the real rider, rocks, fences and
+  // flags are in the scene. Until then the procedural stand-ins are what the
+  // player would see, so the caller keeps its loading screen up.
+  const modelsReady = loadTrailModels((kind, asset) => {
     if (stopped) { disposeModel(asset.scene); return; }
     modelScenes.push(asset.scene);
     if (kind === 'rider') {
@@ -372,7 +384,8 @@ export function createRun(host, {camera, icon, finish}) {
     packs[kind] = pieces(asset.scene, kind === 'rocks' ? (() => true) : (name => name.startsWith('Tree_Pine_Snowy_')));
     if (kind === 'rocks') trailside.forEach(({g, height, angle, index}) => decorate(g, kind, height, angle, index));
     objects.filter(o => o.kind === 'rock').forEach(o => decorate(o.g, 'rocks', 1.35, o.variant * .63, o.variant));
-  });
+  }).then(() => { modelsDone = true; reportReady(); });
+  horizon.ready.then(() => { horizonDone = true; reportReady(); });
 
   // ---- Uploaded props ------------------------------------------------------
   // Fences: 22.6m of rail per piece, repeated down both sides of the trail and
@@ -547,10 +560,14 @@ export function createRun(host, {camera, icon, finish}) {
 
   function animate(now) {
     if (stopped) return;
-    const dt = Math.min(.05, (now - last) / 1e3);
+    // Nothing moves (and no countdown runs) until the real assets are in, so the
+    // player never sees dummy props behind the loading screen.
+    const dt = sceneReady ? Math.min(.05, (now - last) / 1e3) : 0;
     last = now;
     if (camera?.failed) { finish(stats('Webcam tracking stopped')); return; }
-    const phase = gate(camera?.locked, now, camera?.ready), ready = phase.ride;
+    if (sceneReady) rideClock += (now - clockMark) * .001;
+    clockMark = now;
+    const phase = gate(camera?.locked, rideClock * 1000, camera?.ready), ready = phase.ride;
     const speed = ready ? Math.min(32, 15 + distance * .012) : 0;
     distance += speed * dt;
     elapsed += dt;
@@ -647,6 +664,10 @@ export function createRun(host, {camera, icon, finish}) {
   return {
     stop() {
       stopped = true;
+      // Never leave the caller waiting on a readiness that a quit can no longer
+      // deliver (Esc pressed while the loader is still up).
+      readyReported = true;
+      onReady?.();
       cancelAnimationFrame(frame);
       observer.disconnect();
       window.removeEventListener('keydown', keydown);

@@ -5,7 +5,16 @@ import horizon from '../public/winter-horizon.jpg?url';
 // single horizon image. Mirrored wrapping keeps the repeats seamless, and the
 // repeat count must stay even or the mirror boundary shows as a hard seam.
 export function createHorizon(scene) {
+  // Settles from the loader callback, or after a short wait so a failed image can
+  // never hold the loading screen open.
+  let settle = () => {};
+  const ready = new Promise(resolve => {
+    let done = false;
+    settle = () => { if (!done) { done = true; resolve(); } };
+    setTimeout(settle, 2500);
+  });
   const texture = new T.TextureLoader().load(horizon, loaded => {
+    settle();
     loaded.colorSpace = T.SRGBColorSpace;
     loaded.wrapS = T.MirroredRepeatWrapping;
     loaded.wrapT = T.ClampToEdgeWrapping;
@@ -39,6 +48,9 @@ export function createHorizon(scene) {
 
   return {
     mesh,
+    // Resolves when the horizon image is decoded (or has failed), so the
+    // loading screen can wait for the backdrop instead of guessing.
+    ready,
     dispose() {
       scene.remove(mesh);
       geometry.dispose();
