@@ -3,21 +3,37 @@ import {createPoseView} from './pose-view.js';
 import {createRideGate} from './ride-gate.js';
 import {createSideForest} from './cartoon-pines.js';
 import {createSkyTraffic} from './sky-traffic.js';
-import {loadTrailModels, pieces, instance, disposeModel} from './models.js';
+import {createHorizon} from './backdrop.js';
+import {createCrowd} from './crowd.js';
+import {createSnowfall} from './snowfall.js';
+import {loadTrailModels, pieces, instance, fitScene, mergeMeshes, disposeModel} from './models.js';
 import riderFace from './rider-face.jpg';
 import {createCoach} from './coach.js';
+import flagBlue from './textures/wonderlab-flag-blue.jpg?url';
+import flagRed from './textures/wonderlab-flag-red.jpg?url';
+import flagGreen from './textures/wonderlab-flag-green.jpg?url';
+import flagGold from './textures/wonderlab-flag-gold.jpg?url';
+import startBrand from './textures/wonderlab-start.jpg?url';
+import startAd from './textures/wonderlab-start-ad.jpg?url';
 
 const LANES = [-6, -3, 0, 3, 6];
 const GATE_HALF = 1.55;
 const GATE_SCORE = 50;
+// Flag gates alternate palettes so the course reads as a WonderLab race track.
+const GATE_PALETTES = [
+  {left: 'blue', right: 'red'},
+  {left: 'green', right: 'gold'},
+  {left: 'red', right: 'blue'},
+  {left: 'gold', right: 'green'},
+];
 
 export function createRun(host, {camera, icon, finish}) {
   const renderer = new T.WebGLRenderer({antialias: true, alpha: true});
   renderer.setPixelRatio(Math.min(devicePixelRatio, camera ? 1 : 1.25));
-  renderer.setClearColor(0x9bd5ff, 0);
+  renderer.setClearColor(0x0a6fbe, 0);
   const scene = new T.Scene();
-  scene.fog = new T.FogExp2(0xdcefff, .0032);
-  const view = new T.PerspectiveCamera(53, 1, .1, 330);
+  scene.fog = new T.FogExp2(0xdcefff, .0022);
+  const view = new T.PerspectiveCamera(53, 1, .15, 420);
   view.position.set(.65, 2.35, 6.8);
   view.lookAt(0, 1.3, -12);
   scene.add(new T.HemisphereLight(0xf3fbff, 0x7794bd, 1.75));
@@ -91,7 +107,33 @@ export function createRun(host, {camera, icon, finish}) {
   const scenery = [], trailside = [], packs = {}, modelScenes = [];
   const forest = createSideForest(scene);
   const sky = createSkyTraffic(scene);
+  const horizon = createHorizon(scene);
+  const crowd = createCrowd(scene);
+  const snowfall = createSnowfall(scene);
+
+  // Wooden fence pieces line both trail edges, and the three uploaded props
+  // (fence, flag, start gantry) arrive asynchronously and replace placeholders.
+  // Fence rails: created once the uploaded piece is measured, then drawn as two
+  // instanced meshes (one per side) so 40 pieces cost two draw calls.
+  let fenceLeft = null, fenceRight = null;
+  let fenceAsset = null, startAsset = null;
+  const startSlot = new T.Group();
+  scene.add(startSlot);
   let mixer;
+  let flagTemplate = null;
+  const flagMaterials = {};
+
+  // Load one campaign flag per palette colour so gates can mix them freely.
+  function flagPiece(colour) {
+    if (!flagTemplate) return null;
+    const material = flagMaterials[colour];
+    if (!material) return null;
+    const piece = flagTemplate.clone(true);
+    piece.traverse(node => {
+      if (node.isMesh) node.material = material;
+    });
+    return piece;
+  }
 
   function decorate(g, kind, height, angle, index) {
     const pack = packs[kind];
@@ -232,12 +274,6 @@ export function createRun(host, {camera, icon, finish}) {
       mesh(g, 'rock', 0xeaf7ff, .04, 1.02, .03, .83, .5, .62);
     }
     if (kind === 'gate') {
-      for (const side of [-1, 1]) {
-        mesh(g, 'pole', 0xf1f6ff, side * GATE_HALF, 1.05, 0, 1, 2.1, 1);
-        const flag = mesh(g, 'flag', side > 0 ? 0x2f7bff : 0xef3b45, side * GATE_HALF, 1.95, 0, 1, 1, 1);
-        flag.material = new T.MeshStandardMaterial({color: side > 0 ? 0x2f7bff : 0xef3b45, side: T.DoubleSide, roughness: .7});
-        flag.rotation.y = side > 0 ? Math.PI : 0;
-      }
       mesh(g, 'box', 0xbfefff, 0, .012, 0, GATE_HALF * 2, .006, .5);
     }
     if (kind === 'star') mesh(g, 'star', 0xffc229, 0, 1.0, 0, .52, .52, .52);
@@ -245,9 +281,10 @@ export function createRun(host, {camera, icon, finish}) {
       mesh(g, 'ramp', 0x54c6ed, 0, 0, 0, 2.15, .82, 2.65);
       for (let i = 0; i < 3; i++) mesh(g, 'box', 0xe7faff, 0, .18 + i * .214, .8 - i * .68, 1.72, .035, .09).rotation.x = .30;
     }
-    const o = {g, kind, lane, z, used: false, variant: row};
+    const o = {g, kind, lane, z, used: false, variant: row, decorated: false};
     objects.push(o);
     if (kind === 'rock') decorate(o.g, 'rocks', 1.35, o.variant * .63, o.variant);
+    if (kind === 'gate') { decorateGate(o); o.decorated = true; }
   }
 
   loadTrailModels((kind, asset) => {
@@ -277,10 +314,173 @@ export function createRun(host, {camera, icon, finish}) {
       fallback.visible = false;
       return;
     }
+    if (kind === 'fence') {
+      fenceAsset = asset.scene;
+      buildFences();
+      return;
+    }
+    if (kind === 'flag') {
+      const template = asset.scene;
+      const textureLoader = new T.TextureLoader();
+      const sources = {blue: flagBlue, red: flagRed, green: flagGreen, gold: flagGold};
+      let source = null;
+      template.traverse(node => {
+        if (!node.isMesh) return;
+        if (!source) source = node.material;
+        node.material = node.material.clone();
+      });
+      // One material per palette colour; flags swap material rather than texture.
+      for (const [colour, url] of Object.entries(sources)) {
+        const map = textureLoader.load(url);
+        map.colorSpace = T.SRGBColorSpace;
+        map.flipY = true;
+        const material = source ? source.clone() : new T.MeshStandardMaterial();
+        material.map = map;
+        material.name = `flag-${colour}`;
+        material.side = T.DoubleSide;
+        material.metalness = 0;
+        material.roughness = .72;
+        material.color?.set(0xffffff);
+        material.normalMap = null;
+        material.roughnessMap = null;
+        material.metalnessMap = null;
+        material.alphaTest = 0;
+        material.transparent = false;
+        material.needsUpdate = true;
+        flagMaterials[colour] = material;
+      }
+      flagTemplate = new T.Group();
+      const fitted = fitScene(template, {height: 2.15});
+      flagTemplate.add(fitted);
+      // Rebuild every gate with the real model, dropping procedural fallbacks.
+      for (const o of objects.filter(o => o.kind === 'gate')) {
+        for (const child of o.fallback || []) o.g.remove(child);
+        o.fallback = null;
+        decorateGate(o);
+        o.decorated = true;
+      }
+      return;
+    }
+    if (kind === 'start') {
+      startAsset = asset.scene;
+      buildStartGantry();
+      return;
+    }
     packs[kind] = pieces(asset.scene, kind === 'rocks' ? (() => true) : (name => name.startsWith('Tree_Pine_Snowy_')));
     if (kind === 'rocks') trailside.forEach(({g, height, angle, index}) => decorate(g, kind, height, angle, index));
     objects.filter(o => o.kind === 'rock').forEach(o => decorate(o.g, 'rocks', 1.35, o.variant * .63, o.variant));
   });
+
+  // ---- Uploaded props ------------------------------------------------------
+  // Fences: 22.6m of rail per piece, repeated down both sides of the trail and
+  // wrapped with the same distance as the forest so they scroll with the run.
+  // The uploaded piece is 13.34m long along its local Z at 1.85m tall; scaled to
+  // 1.1m tall it covers ~7.9m, so pieces are laid end to end at that spacing.
+  const FENCE_LENGTH = 7.93;
+  const FENCE_COUNT = 20;
+  const FENCE_SPAN = FENCE_LENGTH * FENCE_COUNT;
+  const FENCE_HEIGHT = 1.1;
+  const FENCE_X = 8.8;
+  let fenceSpan = FENCE_SPAN, fenceScale = 1;
+  const fenceOffsets = [];
+  const fenceDummy = new T.Object3D();
+
+  function buildFences() {
+    // One merged geometry per fence piece, instanced down both edges of the
+    // trail: 20 pieces per side cost one draw call each instead of 100.
+    const merged = mergeMeshes(fenceAsset);
+    fenceScale = FENCE_HEIGHT / merged.size.y;
+    const spacing = merged.size.z * fenceScale;
+    const count = Math.ceil(FENCE_SPAN / spacing);
+    fenceSpan = spacing * count;
+    fenceOffsets.length = 0;
+    for (let i = 0; i < count; i++) fenceOffsets.push(-i * spacing);
+    const material = merged.material.clone();
+    material.metalness = 0;
+    for (const side of [-1, 1]) {
+      const fence = new T.InstancedMesh(merged.geometry, material, count);
+      fence.frustumCulled = false;
+      fence.instanceMatrix.setUsage(T.DynamicDrawUsage);
+      scene.add(fence);
+      if (side < 0) fenceLeft = fence; else fenceRight = fence;
+    }
+    updateFences(0);
+  }
+
+  function updateFences(delta) {
+    if (!fenceLeft) return;
+    for (let i = 0; i < fenceOffsets.length; i++) {
+      let z = fenceOffsets[i] + delta;
+      if (z > 12) z -= fenceSpan;
+      fenceOffsets[i] = z;
+      for (const [fence, side] of [[fenceLeft, -1], [fenceRight, 1]]) {
+        fenceDummy.position.set(side * FENCE_X, 0, z);
+        fenceDummy.scale.setScalar(fenceScale);
+        fenceDummy.updateMatrix();
+        fence.setMatrixAt(i, fenceDummy.matrix);
+      }
+    }
+    fenceLeft.instanceMatrix.needsUpdate = true;
+    fenceRight.instanceMatrix.needsUpdate = true;
+  }
+
+  // Start gantry: spans the trail at the top of the run and repeats every 220m
+  // so the branded board shows up again and again along the course.
+  const START_SPACING = 220;
+  const startGates = [];
+  function buildStartGantry() {
+    const loader = new T.TextureLoader();
+    // The main board art already spells the name out three times across its
+    // width, so it maps 1:1; the two small ad panels get a single logo instead.
+    const board = loader.load(startBrand);
+    const ad = loader.load(startAd);
+    board.colorSpace = ad.colorSpace = T.SRGBColorSpace;
+    const load = {Start_Texture: board, Ad_1: ad, Ad_2: ad};
+    for (let copy = 0; copy < 3; copy++) {
+      const gateGroup = new T.Group();
+      const gantry = fitScene(startAsset, {width: 15.2});
+      gantry.traverse(node => {
+        if (!node.isMesh) return;
+        const material = node.material.clone();
+        const map = load[material.name];
+        if (map) {
+          material.map = map;
+          material.color?.set(0xffffff);
+          material.needsUpdate = true;
+        }
+        node.material = material;
+      });
+      gateGroup.add(gantry);
+      gateGroup.position.set(0, 0, -18 - copy * START_SPACING);
+      gateGroup.userData.baseZ = gateGroup.position.z;
+      startSlot.add(gateGroup);
+      startGates.push(gateGroup);
+    }
+  }
+
+  function decorateGate(o) {
+    const palette = GATE_PALETTES[o.variant % GATE_PALETTES.length];
+    const build = (colour, side) => {
+      const piece = flagPiece(colour);
+      if (piece) {
+        piece.position.set(side * GATE_HALF, 0, 0);
+        // Mirror the right-hand flag so both face across the trail.
+        piece.rotation.y = side > 0 ? Math.PI : 0;
+        o.g.add(piece);
+        return;
+      }
+      // Fallback feather flag until the uploaded model arrives.
+      const pole = mesh(o.g, 'pole', 0xdff0ff, side * GATE_HALF, 1.05, 0, 1, 2.1, 1);
+      const cloth = mesh(o.g, 'flag', paletteColour(colour), side * GATE_HALF, 1.75, 0, 1, 1, 1);
+      cloth.material = new T.MeshStandardMaterial({color: paletteColour(colour), side: T.DoubleSide, roughness: .7});
+      cloth.rotation.y = side > 0 ? Math.PI : 0;
+      o.fallback = [pole, cloth];
+    };
+    build(palette.left, -1);
+    build(palette.right, 1);
+  }
+
+  const paletteColour = colour => ({blue: 0x2f7bff, red: 0xef3b45, green: 0x35c98a, gold: 0xffc63a}[colour] || 0x2f7bff);
 
   const shuffled = () => {
     const list = [...LANES];
@@ -328,6 +528,15 @@ export function createRun(host, {camera, icon, finish}) {
 
     if (speed) forest.advance(distance);
     sky.advance(now * .001);
+    crowd.advance(distance, now);
+    snowfall.advance(dt, now, speed, speed);
+    // Fences and the repeated start gantries scroll with the run.
+    if (speed) updateFences(speed * dt);
+    for (const gantry of startGates) {
+      gantry.userData.baseZ += speed * dt;
+      if (gantry.userData.baseZ > 20) gantry.userData.baseZ -= START_SPACING * startGates.length;
+      gantry.position.z = gantry.userData.baseZ;
+    }
 
     const down = k => keys.has(k) || [...pointers.values()].includes(k);
     const steer = camera ? (ready ? camera.lean : 0) : Number(down('right')) - Number(down('left'));
@@ -368,6 +577,8 @@ export function createRun(host, {camera, icon, finish}) {
           o.used = true;
           if (off < GATE_HALF - .35) {
             flags++;
+            crowd.cheer();
+            snowfall.flurry(.6);
             flash = now + 1100;
             message.dataset.kind = 'flag';
             coach.cheer('Clean pass! +50');
@@ -375,7 +586,7 @@ export function createRun(host, {camera, icon, finish}) {
         } else if (o.kind === 'star') {
           if (off < 1 && height < 1.5) { stars++; o.used = true; o.g.visible = false; }
         } else if (o.kind === 'ramp') {
-          if (off < 1.13 && jump < 0) { jump = 0; jumps++; flash = now + 1000; message.dataset.kind = 'ramp'; }
+          if (off < 1.13 && jump < 0) { jump = 0; jumps++; flash = now + 1000; message.dataset.kind = 'ramp'; snowfall.flurry(1.1); }
         } else if (height < 1.29 && off < 1.2) {
           finish(stats('Run complete!'));
           return;
@@ -410,6 +621,16 @@ export function createRun(host, {camera, icon, finish}) {
       mats.forEach(m => m.dispose());
       forest.dispose();
       sky.dispose();
+      horizon.dispose();
+      for (const fence of [fenceLeft, fenceRight]) {
+        if (!fence) continue;
+        scene.remove(fence);
+        fence.geometry.dispose();
+        fence.material.dispose();
+        fence.dispose();
+      }
+      crowd.dispose();
+      snowfall.dispose();
       mixer?.stopAllAction();
       modelScenes.forEach(disposeModel);
       renderer.dispose();

@@ -1,2 +1,5 @@
 node_modules/
 dist/
+
+# headless verification harness (regenerate with _simsetup.sh)
+.simtmp/
